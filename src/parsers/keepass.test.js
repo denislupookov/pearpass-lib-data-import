@@ -5,7 +5,7 @@ import {
   parseKeePassCsv,
   parseKeePassXml,
   parseKeePassData,
-  parseKeePassKdbx
+  decryptKeePassKdbx
 } from './keepass'
 import { addHttps } from '../utils/addHttps'
 
@@ -447,166 +447,32 @@ describe('parseKeePassXml', () => {
   })
 })
 
-describe('parseKeePassKdbx', () => {
+describe('decryptKeePassKdbx', () => {
   beforeEach(() => {
     jest.clearAllMocks()
   })
 
-  it('extracts entries from KDBX database', async () => {
-    const mockFields = new Map([
-      ['Title', 'Test Login'],
-      ['UserName', 'testuser'],
-      ['Password', 'testpass'],
-      ['URL', 'example.com'],
-      ['Notes', 'A note']
-    ])
-
-    kdbxweb.Kdbx.load.mockResolvedValue({
-      groups: [
+  it('returns the root group from the decrypted KDBX database', async () => {
+    const mockRootGroup = {
+      name: 'Root',
+      entries: [
         {
-          name: 'Root',
-          entries: [{ fields: mockFields }],
-          groups: []
+          fields: new Map([
+            ['Title', 'Test Login'],
+            ['UserName', 'testuser'],
+            ['Password', 'testpass'],
+            ['URL', 'example.com'],
+            ['Notes', 'A note']
+          ])
         }
-      ]
-    })
+      ],
+      groups: []
+    }
 
-    const result = await parseKeePassKdbx(new ArrayBuffer(10), 'password')
-    expect(result).toEqual([
-      {
-        type: 'login',
-        folder: 'Root',
-        isFavorite: false,
-        data: {
-          title: 'Test Login',
-          username: 'testuser',
-          password: 'testpass',
-          note: 'A note',
-          websites: ['https://example.com'],
-          customFields: []
-        }
-      }
-    ])
-  })
+    kdbxweb.Kdbx.load.mockResolvedValue({ groups: [mockRootGroup] })
 
-  it('walks nested groups and builds folder paths', async () => {
-    const makeFields = (title) =>
-      new Map([
-        ['Title', title],
-        ['UserName', ''],
-        ['Password', ''],
-        ['URL', ''],
-        ['Notes', '']
-      ])
-
-    kdbxweb.Kdbx.load.mockResolvedValue({
-      groups: [
-        {
-          name: 'Root',
-          entries: [],
-          groups: [
-            {
-              name: 'Internet',
-              entries: [{ fields: makeFields('Web Entry') }],
-              groups: [
-                {
-                  name: 'Banking',
-                  entries: [{ fields: makeFields('Bank Entry') }],
-                  groups: []
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    })
-
-    const result = await parseKeePassKdbx(new ArrayBuffer(10), 'password')
-    expect(result.length).toBe(2)
-    expect(result[0].folder).toBe('Root/Internet')
-    expect(result[0].data.title).toBe('Web Entry')
-    expect(result[1].folder).toBe('Root/Internet/Banking')
-    expect(result[1].data.title).toBe('Bank Entry')
-  })
-
-  it('handles TOTP custom fields', async () => {
-    const mockFields = new Map([
-      ['Title', 'TOTP Entry'],
-      ['UserName', 'user'],
-      ['Password', 'pass'],
-      ['URL', ''],
-      ['Notes', ''],
-      ['TOTP Seed', 'JBSWY3DPEHPK3PXP'],
-      ['otp', 'otpauth://totp/test']
-    ])
-
-    kdbxweb.Kdbx.load.mockResolvedValue({
-      groups: [
-        {
-          name: 'Root',
-          entries: [{ fields: mockFields }],
-          groups: []
-        }
-      ]
-    })
-
-    const result = await parseKeePassKdbx(new ArrayBuffer(10), 'password')
-    expect(result[0].data.customFields).toEqual([
-      { type: 'note', note: 'TOTP: JBSWY3DPEHPK3PXP' },
-      { type: 'note', note: 'TOTP: otpauth://totp/test' }
-    ])
-  })
-
-  it('handles non-standard custom fields', async () => {
-    const mockFields = new Map([
-      ['Title', 'Entry'],
-      ['UserName', 'user'],
-      ['Password', 'pass'],
-      ['URL', ''],
-      ['Notes', ''],
-      ['Recovery Email', 'backup@test.com'],
-      ['Security Question', 'Pet name']
-    ])
-
-    kdbxweb.Kdbx.load.mockResolvedValue({
-      groups: [
-        {
-          name: 'Root',
-          entries: [{ fields: mockFields }],
-          groups: []
-        }
-      ]
-    })
-
-    const result = await parseKeePassKdbx(new ArrayBuffer(10), 'password')
-    expect(result[0].data.customFields).toEqual([
-      { type: 'note', note: 'Recovery Email: backup@test.com' },
-      { type: 'note', note: 'Security Question: Pet name' }
-    ])
-  })
-
-  it('handles ProtectedValue fields', async () => {
-    const protectedPassword = new kdbxweb.ProtectedValue('secret123')
-    const mockFields = new Map([
-      ['Title', 'Entry'],
-      ['UserName', 'user'],
-      ['Password', protectedPassword],
-      ['URL', ''],
-      ['Notes', '']
-    ])
-
-    kdbxweb.Kdbx.load.mockResolvedValue({
-      groups: [
-        {
-          name: 'Root',
-          entries: [{ fields: mockFields }],
-          groups: []
-        }
-      ]
-    })
-
-    const result = await parseKeePassKdbx(new ArrayBuffer(10), 'password')
-    expect(result[0].data.password).toBe('secret123')
+    const result = await decryptKeePassKdbx(new ArrayBuffer(10), 'password')
+    expect(result).toEqual(mockRootGroup)
   })
 
   it('throws "Incorrect password" on InvalidKey error', async () => {
@@ -615,16 +481,16 @@ describe('parseKeePassKdbx', () => {
     kdbxweb.Kdbx.load.mockRejectedValue(error)
 
     await expect(
-      parseKeePassKdbx(new ArrayBuffer(10), 'wrong')
+      decryptKeePassKdbx(new ArrayBuffer(10), 'wrong')
     ).rejects.toThrow('Incorrect password')
   })
 
   it('throws with original error message on other errors', async () => {
     kdbxweb.Kdbx.load.mockRejectedValue(new Error('Random error'))
 
-    await expect(parseKeePassKdbx(new ArrayBuffer(10), 'pass')).rejects.toThrow(
-      'Failed to open database: Random error'
-    )
+    await expect(
+      decryptKeePassKdbx(new ArrayBuffer(10), 'pass')
+    ).rejects.toThrow('Failed to open database: Random error')
   })
 })
 
@@ -661,39 +527,133 @@ describe('parseKeePassData', () => {
     expect(result[0].data.title).toBe('XML Entry')
   })
 
-  it('routes KDBX to parseKeePassKdbx', async () => {
-    kdbxweb.Kdbx.load.mockResolvedValue({
-      groups: [
+  it('routes KDBX group to walkGroup', async () => {
+    const rootGroup = {
+      name: 'Root',
+      entries: [
         {
-          name: 'Root',
-          entries: [
-            {
-              fields: new Map([
-                ['Title', 'KDBX Entry'],
-                ['UserName', ''],
-                ['Password', ''],
-                ['URL', ''],
-                ['Notes', '']
-              ])
-            }
-          ],
-          groups: []
+          fields: new Map([
+            ['Title', 'KDBX Entry'],
+            ['UserName', ''],
+            ['Password', ''],
+            ['URL', ''],
+            ['Notes', '']
+          ])
         }
-      ]
-    })
+      ],
+      groups: []
+    }
 
-    const result = await parseKeePassData(
-      new ArrayBuffer(10),
-      'kdbx',
-      'password'
-    )
+    const result = await parseKeePassData(rootGroup, 'kdbx')
     expect(result[0].data.title).toBe('KDBX Entry')
   })
 
-  it('throws for KDBX without password', async () => {
-    await expect(parseKeePassData(new ArrayBuffer(10), 'kdbx')).rejects.toThrow(
-      'Password is required for KDBX files'
-    )
+  it('extracts text from ProtectedValue password fields via getText()', async () => {
+    const protectedPassword = new kdbxweb.ProtectedValue('secret123')
+    const rootGroup = {
+      name: 'Root',
+      entries: [
+        {
+          fields: new Map([
+            ['Title', 'Entry'],
+            ['UserName', 'user'],
+            ['Password', protectedPassword],
+            ['URL', ''],
+            ['Notes', '']
+          ])
+        }
+      ],
+      groups: []
+    }
+
+    const result = await parseKeePassData(rootGroup, 'kdbx')
+    expect(result[0].data.password).toBe('secret123')
+  })
+
+  it('maps TOTP fields to customFields with TOTP: prefix', async () => {
+    const rootGroup = {
+      name: 'Root',
+      entries: [
+        {
+          fields: new Map([
+            ['Title', 'TOTP Entry'],
+            ['UserName', 'user'],
+            ['Password', 'pass'],
+            ['URL', ''],
+            ['Notes', ''],
+            ['TOTP Seed', 'JBSWY3DPEHPK3PXP'],
+            ['otp', 'otpauth://totp/test']
+          ])
+        }
+      ],
+      groups: []
+    }
+
+    const result = await parseKeePassData(rootGroup, 'kdbx')
+    expect(result[0].data.customFields).toEqual([
+      { type: 'note', note: 'TOTP: JBSWY3DPEHPK3PXP' },
+      { type: 'note', note: 'TOTP: otpauth://totp/test' }
+    ])
+  })
+
+  it('maps non-standard fields to customFields as "key: value" notes', async () => {
+    const rootGroup = {
+      name: 'Root',
+      entries: [
+        {
+          fields: new Map([
+            ['Title', 'Entry'],
+            ['UserName', 'user'],
+            ['Password', 'pass'],
+            ['URL', ''],
+            ['Notes', ''],
+            ['Recovery Email', 'backup@test.com'],
+            ['Security Question', 'Pet name']
+          ])
+        }
+      ],
+      groups: []
+    }
+
+    const result = await parseKeePassData(rootGroup, 'kdbx')
+    expect(result[0].data.customFields).toEqual([
+      { type: 'note', note: 'Recovery Email: backup@test.com' },
+      { type: 'note', note: 'Security Question: Pet name' }
+    ])
+  })
+
+  it('concatenates nested group names into the folder path', async () => {
+    const rootGroup = {
+      name: 'Root',
+      entries: [],
+      groups: [
+        {
+          name: 'Internet',
+          entries: [],
+          groups: [
+            {
+              name: 'Banking',
+              entries: [
+                {
+                  fields: new Map([
+                    ['Title', 'Bank Entry'],
+                    ['UserName', ''],
+                    ['Password', ''],
+                    ['URL', ''],
+                    ['Notes', '']
+                  ])
+                }
+              ],
+              groups: []
+            }
+          ]
+        }
+      ]
+    }
+
+    const result = await parseKeePassData(rootGroup, 'kdbx')
+    expect(result[0].folder).toBe('Root/Internet/Banking')
+    expect(result[0].data.title).toBe('Bank Entry')
   })
 
   it('throws for unsupported file type', async () => {

@@ -111,9 +111,9 @@ const walkGroup = (group, parentPath = '') => {
  * Parses a KDBX (KeePass 2.x) encrypted database file.
  * @param {ArrayBuffer} arrayBuffer - Raw KDBX file contents.
  * @param {string} password - Master password for decryption.
- * @returns {Promise<Array<object>>}
+ * @returns {Promise<object>}
  */
-export const parseKeePassKdbx = async (arrayBuffer, password) => {
+export const decryptKeePassKdbx = async (arrayBuffer, password) => {
   let db
   try {
     const credentials = new kdbxweb.Credentials(
@@ -139,7 +139,7 @@ export const parseKeePassKdbx = async (arrayBuffer, password) => {
   const rootGroup = db.groups[0]
   if (!rootGroup) return []
 
-  return walkGroup(rootGroup, '')
+  return rootGroup
 }
 
 /**
@@ -382,15 +382,11 @@ export const parseKeePassXml = (text) => {
  * Routes to the appropriate parser based on file type.
  * @param {string | ArrayBuffer} data - File contents (text for CSV/XML, ArrayBuffer for KDBX).
  * @param {string} fileType - One of 'kdbx', 'csv', or 'xml'.
- * @param {string} [password] - Master password (required for KDBX).
  * @returns {Promise<Array<object>>}
  */
-export const parseKeePassData = async (data, fileType, password) => {
+export const parseKeePassData = async (data, fileType) => {
   if (fileType === 'kdbx') {
-    if (!password) {
-      throw new Error('Password is required for KDBX files')
-    }
-    return parseKeePassKdbx(data, password)
+    return walkGroup(data, '')
   }
 
   if (fileType === 'csv') {
