@@ -1,8 +1,122 @@
+import '../utils/setupCrypto.js'
+import { cbc } from '@noble/ciphers/aes'
+import { expand } from '@noble/hashes/hkdf'
+import { hmac } from '@noble/hashes/hmac'
+import { pbkdf2 } from '@noble/hashes/pbkdf2'
+import { sha256 } from '@noble/hashes/sha256'
+import { argon2id } from 'hash-wasm'
+
 import { addHttps } from '../utils/addHttps'
 import { getRowsFromCsv } from '../utils/getRowsFromCsv'
 
+// ---------------------------------------------------------------------------
+// Bitwarden encrypted-export decryption helpers
+// ---------------------------------------------------------------------------
+
+const fromBase64 = (b64) => {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(b64, 'base64'))
+  }
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+}
+
+const toUtf8 = (str) => new TextEncoder().encode(str)
+
+const timingSafeEqual = (a, b) => {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]
+  return diff === 0
+}
+
 /**
- * @param {{firstName?: string, middleName?: string, lastName?: string}} identity
+ * Splits a Bitwarden CipherString of the form "2.iv_b64|ct_b64|mac_b64".
+ * @param {string} cipherString
+ * @returns {{ iv: Uint8Array, ct: Uint8Array, mac: Uint8Array }}
+ */
+const parseCipherString = (cipherString) => {
+  const dot = cipherString.indexOf('.')
+  const type = parseInt(cipherString.slice(0, dot), 10)
+  if (type !== 2) throw new Error(`Unsupported CipherString type: ${type}`)
+  const parts = cipherString.slice(dot + 1).split('|')
+  if (parts.length !== 3) throw new Error('Invalid CipherString format')
+  return {
+    iv: fromBase64(parts[0]),
+    ct: fromBase64(parts[1]),
+    mac: fromBase64(parts[2])
+  }
+}
+
+/**
+ * Verifies the HMAC then decrypts an AES-256-CBC CipherString.
+ * @param {string} cipherString
+ * @param {Uint8Array} encKey
+ * @param {Uint8Array} macKey
+ * @returns {string} Decrypted UTF-8 string
+ */
+const aesCbcDecrypt = (cipherString, encKey, macKey) => {
+  const { iv, ct, mac } = parseCipherString(cipherString)
+
+  const expectedMac = hmac(sha256, macKey, new Uint8Array([...iv, ...ct]))
+  if (!timingSafeEqual(expectedMac, mac)) {
+    throw new Error('Incorrect password')
+  }
+
+  const plainBytes = cbc(encKey, iv).decrypt(ct)
+  return new TextDecoder().decode(plainBytes)
+}
+
+/**
+ * Decrypts a Bitwarden password-protected encrypted JSON export.
+ * Supports both PBKDF2 SHA-256 (kdfType 0) and Argon2id (kdfType 1).
+ *
+ * @param {string} encryptedText - Raw contents of the encrypted .json file
+ * @param {string} password - The password used to protect the export
+ * @returns {Promise<object>} Decrypted vault JSON (pass to parseBitwardenJson)
+ * @throws {Error} If the file is not password-protected or the password is wrong
+ */
+export const decryptBitwardenJson = async (encryptedText, password) => {
+  const json = JSON.parse(encryptedText)
+
+  if (!json.encrypted || !json.passwordProtected) {
+    throw new Error('File is not password-protected')
+  }
+
+  // Bitwarden encodes the base64 salt string as UTF-8 bytes — it does NOT decode it
+  const salt = toUtf8(json.salt)
+  const passwordBytes = toUtf8(password)
+  const kdfType = json.kdfType ?? 0
+
+  let masterKey
+  if (kdfType === 0) {
+    masterKey = pbkdf2(sha256, passwordBytes, salt, {
+      c: json.kdfIterations,
+      dkLen: 32
+    })
+  } else if (kdfType === 1) {
+    // Argon2id: Bitwarden pre-hashes the salt with SHA-256
+    const saltHashed = sha256(salt)
+    masterKey = await argon2id({
+      password: passwordBytes,
+      salt: saltHashed,
+      parallelism: json.kdfParallelism ?? 4,
+      iterations: json.kdfIterations,
+      memorySize: (json.kdfMemory ?? 64) * 1024,
+      hashLength: 32,
+      outputType: 'binary'
+    })
+  } else {
+    throw new Error(`Unsupported KDF type: ${kdfType}`)
+  }
+
+  const encKey = expand(sha256, masterKey, toUtf8('enc'), 32)
+  const macKey = expand(sha256, masterKey, toUtf8('mac'), 32)
+
+  const decryptedText = aesCbcDecrypt(json.data, encKey, macKey)
+  return JSON.parse(decryptedText)
+}
+
+/**
  * @returns {string}
  */
 const getFullName = (identity) =>
@@ -271,7 +385,9 @@ export const parseBitwardenCSV = (csvText) => {
  */
 export const parseBitwardenData = (data, fileType) => {
   if (fileType === 'json') {
-    return parseBitwardenJson(JSON.parse(data))
+    return parseBitwardenJson(
+      typeof data === 'string' ? JSON.parse(data) : data
+    )
   }
 
   if (fileType === 'csv') {
