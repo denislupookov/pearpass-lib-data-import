@@ -1,6 +1,7 @@
 export const OTP_PROVIDERS = {
   googleMigration: 'google-migration',
   otpUri: 'otp-uri',
+  aegis: 'aegis',
   unknown: 'unknown'
 }
 

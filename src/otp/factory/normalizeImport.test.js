@@ -1,4 +1,6 @@
 import { normalizeImport } from './normalizeImport'
+import { OTP_PROVIDERS } from '../constants'
+import { buildEncryptedAegis } from '../normalizers/aegis/testHelpers'
 import {
   encodeMigrationPayload,
   makeGoogleUri
@@ -189,6 +191,65 @@ describe('normalizeImport — standard otpauth URIs', () => {
     expect(result.records).toHaveLength(2)
     expect(result.records[0].type).toBe('TOTP')
     expect(result.records[1].type).toBe('HOTP')
+  })
+})
+
+describe('normalizeImport — Aegis', () => {
+  const aegisDb = {
+    version: 3,
+    entries: [
+      {
+        type: 'totp',
+        name: 'alice@example.com',
+        issuer: 'GitHub',
+        info: {
+          secret: 'JBSWY3DPEHPK3PXP',
+          algo: 'SHA1',
+          digits: 6,
+          period: 30
+        }
+      }
+    ]
+  }
+
+  const plaintextAegis = JSON.stringify({
+    version: 1,
+    header: { slots: null, params: null },
+    db: aegisDb
+  })
+
+  it('normalises a plaintext Aegis export into OTPRecords', () => {
+    const result = normalizeImport(plaintextAegis, {
+      provider: OTP_PROVIDERS.aegis
+    })
+    expect(result.status).toBe('complete')
+    expect(result.records).toHaveLength(1)
+    expect(result.records[0]).toMatchObject({
+      type: 'TOTP',
+      label: 'alice@example.com',
+      issuer: 'GitHub',
+      secret: 'JBSWY3DPEHPK3PXP',
+      algorithm: 'SHA1',
+      digits: 6,
+      period: 30
+    })
+  })
+
+  it('decrypts and normalises an encrypted Aegis export with the password', () => {
+    const encrypted = JSON.stringify(buildEncryptedAegis(aegisDb, 'hunter2'))
+    const result = normalizeImport(encrypted, {
+      provider: OTP_PROVIDERS.aegis,
+      password: 'hunter2'
+    })
+    expect(result.status).toBe('complete')
+    expect(result.records[0].label).toBe('alice@example.com')
+  })
+
+  it('throws a password-required error for an encrypted export without a password', () => {
+    const encrypted = JSON.stringify(buildEncryptedAegis(aegisDb, 'hunter2'))
+    expect(() =>
+      normalizeImport(encrypted, { provider: OTP_PROVIDERS.aegis })
+    ).toThrow(/password is required/i)
   })
 })
 
