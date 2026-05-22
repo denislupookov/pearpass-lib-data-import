@@ -9,10 +9,11 @@ import { decryptAegisVault } from './decrypt.js'
  *
  * @param {string | Object} fileContent - raw Aegis .json content, or the parsed object
  * @param {string} [password] - required for encrypted exports
- * @returns {{ version?: number, entries?: Object[] }} the decrypted db
+ * @param {{ decryptViaWorklet?: Function }} [options] - optional KDF offload hook
+ * @returns {Promise<{ version?: number, entries?: Object[] }>} the decrypted db
  * @throws {Error} on malformed input, missing/incorrect password, or biometric-only export
  */
-export function decodeAegisVault(fileContent, password) {
+export async function decodeAegisVault(fileContent, password, options = {}) {
   let json
   try {
     json =
@@ -27,7 +28,7 @@ export function decodeAegisVault(fileContent, password) {
 
   // Encrypted exports serialize `db` as a base64 string and fill header.slots.
   if (typeof json.db === 'string') {
-    return decryptAegisVault(json, password)
+    return decryptAegisVault(json, password, options)
   }
 
   if (!json.db || typeof json.db !== 'object') {

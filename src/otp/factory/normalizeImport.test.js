@@ -29,8 +29,8 @@ function makeSingleGoogleUri(overrides = {}) {
 }
 
 describe('normalizeImport — Google Authenticator migration', () => {
-  it('decodes and normalises a single QR code', () => {
-    const result = normalizeImport(makeSingleGoogleUri())
+  it('decodes and normalises a single QR code', async () => {
+    const result = await normalizeImport(makeSingleGoogleUri())
 
     expect(result.status).toBe('complete')
     expect(result.records).toHaveLength(1)
@@ -45,12 +45,12 @@ describe('normalizeImport — Google Authenticator migration', () => {
     })
   })
 
-  it('accepts an array with a single migration URI', () => {
-    const result = normalizeImport([makeSingleGoogleUri()])
+  it('accepts an array with a single migration URI', async () => {
+    const result = await normalizeImport([makeSingleGoogleUri()])
     expect(result.status).toBe('complete')
   })
 
-  it('assembles a complete two-QR batch', () => {
+  it('assembles a complete two-QR batch', async () => {
     const uri0 = makeGoogleUri(
       encodeMigrationPayload({
         otpParams: [{ secret: HELLO_BYTES, name: 'alice', type: 2 }],
@@ -68,14 +68,14 @@ describe('normalizeImport — Google Authenticator migration', () => {
       })
     )
 
-    const result = normalizeImport([uri0, uri1])
+    const result = await normalizeImport([uri0, uri1])
     expect(result.status).toBe('complete')
     expect(result.records).toHaveLength(2)
     expect(result.records[0].label).toBe('alice')
     expect(result.records[1].label).toBe('bob')
   })
 
-  it('returns incomplete-batch when parts are missing', () => {
+  it('returns incomplete-batch when parts are missing', async () => {
     const uri = makeGoogleUri(
       encodeMigrationPayload({
         otpParams: [{ secret: HELLO_BYTES, name: 'alice', type: 2 }],
@@ -85,7 +85,7 @@ describe('normalizeImport — Google Authenticator migration', () => {
       })
     )
 
-    const result = normalizeImport([uri])
+    const result = await normalizeImport([uri])
     expect(result.status).toBe('incomplete-batch')
     expect(result.expected).toBe(2)
     expect(result.received).toBe(1)
@@ -98,14 +98,14 @@ describe('normalizeImport — real-world Google Authenticator export', () => {
   const REAL_URI =
     'otpauth-migration://offline?data=CiQKCkhlbGxvId6tvu8SBkdpb3JnaRoIZmFjZWJvb2sgASgBMAIKMQoKSGVsbG8h3q2%2B7xITZ2lvcmdpa2hhdEBtYWlsLmNvbRoITGlua2VkaW4gASgBMAIKKAoKTmVsbG8gHq2%2B7xINa2hhdEBtYWlsLmNvbRoFR21haWwgASgBMAIKKQoKTmVsbG8gHq2%2B9xINa2hhdEBtYWlsLmNvbRoGR29vbGdlIAEoATACCh4KCkhlnGxvEd6tvu8SBFRlc3QaBGVCYXkgASgBMAIKIQoKSGWcbG8R3q2%2B6xIEVGVzdBoHRHJvcGJveCABKAEwAgoeCgpIZZxsbxHevb7rEgZUZXN0MjMaAkVBIAEoATACCigKCkhlnGxvEd69vu4SBlRlc3QyMxoMRGlnaXRhbE9jZWFuIAEoATACCiIKCkhlnGxvcd69vu4SBlRlc3QyMxoGR2l0SHViIAEoATACCiIKCkhlnGxvcd7dvu4SBlRlc3QyMxoGSGVyb2t1IAEoATACEAIYASAA'
 
-  it('decodes all 10 accounts', () => {
-    const result = normalizeImport(REAL_URI)
+  it('decodes all 10 accounts', async () => {
+    const result = await normalizeImport(REAL_URI)
     expect(result.status).toBe('complete')
     expect(result.records).toHaveLength(10)
   })
 
-  it('every record has required fields with correct types', () => {
-    const { records } = normalizeImport(REAL_URI)
+  it('every record has required fields with correct types', async () => {
+    const { records } = await normalizeImport(REAL_URI)
     for (const record of records) {
       expect(record.type).toBe('TOTP')
       expect(record.algorithm).toBe('SHA1')
@@ -117,8 +117,8 @@ describe('normalizeImport — real-world Google Authenticator export', () => {
     }
   })
 
-  it('decodes records in the correct order with expected issuers', () => {
-    const { records } = normalizeImport(REAL_URI)
+  it('decodes records in the correct order with expected issuers', async () => {
+    const { records } = await normalizeImport(REAL_URI)
     const issuers = records.map((r) => r.issuer)
     expect(issuers).toEqual([
       'facebook',
@@ -134,8 +134,8 @@ describe('normalizeImport — real-world Google Authenticator export', () => {
     ])
   })
 
-  it('decodes labels correctly', () => {
-    const { records } = normalizeImport(REAL_URI)
+  it('decodes labels correctly', async () => {
+    const { records } = await normalizeImport(REAL_URI)
     expect(records[0].label).toBe('Giorgi')
     expect(records[1].label).toBe('giorgikhat@mail.com')
     expect(records[2].label).toBe('khat@mail.com')
@@ -143,8 +143,8 @@ describe('normalizeImport — real-world Google Authenticator export', () => {
     expect(records[6].label).toBe('Test23')
   })
 
-  it('decodes secrets as non-empty base32 strings', () => {
-    const { records } = normalizeImport(REAL_URI)
+  it('decodes secrets as non-empty base32 strings', async () => {
+    const { records } = await normalizeImport(REAL_URI)
     expect(records[0].secret).toBe('JBSWY3DPEHPK3PXP')
     expect(records[1].secret).toBe('JBSWY3DPEHPK3PXP')
   })
@@ -153,11 +153,11 @@ describe('normalizeImport — real-world Google Authenticator export', () => {
   // 2-QR export session. REAL_URI is a distinct standalone export (batchSize=1)
   // and cannot be combined with it — the missing piece is the first QR of this
   // same 2-QR session (batchIndex=0).
-  it('returns incomplete-batch for the second QR of a 2-QR export when first is absent', () => {
+  it('returns incomplete-batch for the second QR of a 2-QR export when first is absent', async () => {
     const secondQr =
       'otpauth-migration://offline?data=CiYKCkhlnGhvcd7dvvASBlRlc3QyMxoKU2FsZXNmb3JjZSABKAEwAhACGAIgAQ%3D%3D'
 
-    const result = normalizeImport(secondQr)
+    const result = await normalizeImport(secondQr)
     expect(result.status).toBe('incomplete-batch')
     expect(result.expected).toBe(2)
     expect(result.received).toBe(1)
@@ -166,8 +166,8 @@ describe('normalizeImport — real-world Google Authenticator export', () => {
 })
 
 describe('normalizeImport — standard otpauth URIs', () => {
-  it('normalises a single TOTP URI', () => {
-    const result = normalizeImport(
+  it('normalises a single TOTP URI', async () => {
+    const result = await normalizeImport(
       'otpauth://totp/alice%40example.com?secret=JBSWY3DP&issuer=Example'
     )
 
@@ -181,12 +181,12 @@ describe('normalizeImport — standard otpauth URIs', () => {
     })
   })
 
-  it('normalises multiple otpauth URIs', () => {
+  it('normalises multiple otpauth URIs', async () => {
     const uris = [
       'otpauth://totp/alice?secret=JBSWY3DP',
       'otpauth://hotp/bob?secret=JBSWY3DP&counter=0'
     ]
-    const result = normalizeImport(uris)
+    const result = await normalizeImport(uris)
     expect(result.status).toBe('complete')
     expect(result.records).toHaveLength(2)
     expect(result.records[0].type).toBe('TOTP')
@@ -218,8 +218,8 @@ describe('normalizeImport — Aegis', () => {
     db: aegisDb
   })
 
-  it('normalises a plaintext Aegis export into OTPRecords', () => {
-    const result = normalizeImport(plaintextAegis, {
+  it('normalises a plaintext Aegis export into OTPRecords', async () => {
+    const result = await normalizeImport(plaintextAegis, {
       provider: OTP_PROVIDERS.aegis
     })
     expect(result.status).toBe('complete')
@@ -235,9 +235,9 @@ describe('normalizeImport — Aegis', () => {
     })
   })
 
-  it('decrypts and normalises an encrypted Aegis export with the password', () => {
+  it('decrypts and normalises an encrypted Aegis export with the password', async () => {
     const encrypted = JSON.stringify(buildEncryptedAegis(aegisDb, 'hunter2'))
-    const result = normalizeImport(encrypted, {
+    const result = await normalizeImport(encrypted, {
       provider: OTP_PROVIDERS.aegis,
       password: 'hunter2'
     })
@@ -245,20 +245,52 @@ describe('normalizeImport — Aegis', () => {
     expect(result.records[0].label).toBe('alice@example.com')
   })
 
-  it('throws a password-required error for an encrypted export without a password', () => {
+  it('rejects with a password-required error for an encrypted export without a password', async () => {
     const encrypted = JSON.stringify(buildEncryptedAegis(aegisDb, 'hunter2'))
-    expect(() =>
+    await expect(
       normalizeImport(encrypted, { provider: OTP_PROVIDERS.aegis })
-    ).toThrow(/password is required/i)
+    ).rejects.toThrow(/password is required/i)
+  })
+
+  it('concatenates records from multiple Aegis inputs (does not drop extras)', async () => {
+    const second = JSON.stringify({
+      version: 1,
+      header: { slots: null, params: null },
+      db: {
+        version: 3,
+        entries: [
+          {
+            type: 'totp',
+            name: 'bob',
+            issuer: 'AWS',
+            info: {
+              secret: 'JBSWY3DPEHPK3PXP',
+              algo: 'SHA1',
+              digits: 6,
+              period: 30
+            }
+          }
+        ]
+      }
+    })
+
+    const result = await normalizeImport([plaintextAegis, second], {
+      provider: OTP_PROVIDERS.aegis
+    })
+    expect(result.status).toBe('complete')
+    expect(result.records.map((r) => r.label)).toEqual([
+      'alice@example.com',
+      'bob'
+    ])
   })
 })
 
 describe('normalizeImport — invalid input', () => {
-  it('throws on unrecognised format', () => {
-    expect(() => normalizeImport('not-a-valid-uri')).toThrow()
+  it('rejects on unrecognised format', async () => {
+    await expect(normalizeImport('not-a-valid-uri')).rejects.toThrow()
   })
 
-  it('throws on empty array', () => {
-    expect(() => normalizeImport([])).toThrow()
+  it('rejects on empty array', async () => {
+    await expect(normalizeImport([])).rejects.toThrow()
   })
 })

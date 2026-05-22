@@ -11,8 +11,9 @@ const VALID_ALGORITHMS = new Set(Object.values(OTP_ALGORITHM))
 
 /**
  * Maps a single Aegis entry to an OTPRecord.
- * Returns null for entries we don't support (e.g. "steam") or that lack a
- * secret, so the caller can skip them.
+ * Returns null for entries we can't safely import — an unsupported type (e.g.
+ * "steam"), a missing/non-string secret, or an unrecognized algorithm — so the
+ * caller can skip them without aborting the whole import.
  *
  * @param {Object} entry - one item from the Aegis `db.entries` array
  * @returns {OTPRecord | null}
@@ -22,12 +23,14 @@ function mapEntry(entry) {
   if (!type) return null
 
   const info = entry.info || {}
-  if (!info.secret) return null
+  if (typeof info.secret !== 'string' || !info.secret) return null
 
-  const algorithmRaw = (info.algo || OTP_ALGORITHM.SHA1).toUpperCase()
-  const algorithm = VALID_ALGORITHMS.has(algorithmRaw)
-    ? algorithmRaw
-    : OTP_ALGORITHM.SHA1
+  // Default to SHA1 only when the algorithm is absent. A present-but-invalid
+  // algorithm is skipped — never silently coerced to SHA1 (which would generate
+  // wrong codes for SHA256/SHA512 secrets), and never thrown (which would abort
+  // the whole bulk import over one bad entry).
+  const algorithm = info.algo ? info.algo.toUpperCase() : OTP_ALGORITHM.SHA1
+  if (!VALID_ALGORITHMS.has(algorithm)) return null
 
   /** @type {OTPRecord} */
   const record = {

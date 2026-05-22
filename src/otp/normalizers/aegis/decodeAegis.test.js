@@ -20,27 +20,33 @@ const plaintextExport = {
 }
 
 describe('decodeAegisVault', () => {
-  it('returns the db for a plaintext export (string or object)', () => {
-    expect(decodeAegisVault(JSON.stringify(plaintextExport))).toEqual(aegisDb)
-    expect(decodeAegisVault(plaintextExport)).toEqual(aegisDb)
+  it('returns the db for a plaintext export (string or object)', async () => {
+    expect(await decodeAegisVault(JSON.stringify(plaintextExport))).toEqual(
+      aegisDb
+    )
+    expect(await decodeAegisVault(plaintextExport)).toEqual(aegisDb)
   })
 
-  it('decrypts an encrypted export with the correct password', () => {
+  it('decrypts an encrypted export with the correct password', async () => {
     const encrypted = buildEncryptedAegis(aegisDb, 'hunter2')
-    expect(decodeAegisVault(encrypted, 'hunter2')).toEqual(aegisDb)
+    expect(await decodeAegisVault(encrypted, 'hunter2')).toEqual(aegisDb)
   })
 
-  it('throws a password-required error for an encrypted export with no password', () => {
+  it('rejects with a password-required error for an encrypted export with no password', async () => {
     const encrypted = buildEncryptedAegis(aegisDb, 'hunter2')
-    expect(() => decodeAegisVault(encrypted)).toThrow(/password is required/i)
+    await expect(decodeAegisVault(encrypted)).rejects.toThrow(
+      /password is required/i
+    )
   })
 
-  it('throws on invalid JSON', () => {
-    expect(() => decodeAegisVault('{ not json')).toThrow(/not valid json/i)
+  it('rejects on invalid JSON', async () => {
+    await expect(decodeAegisVault('{ not json')).rejects.toThrow(
+      /not valid json/i
+    )
   })
 
-  it('throws when db is missing', () => {
-    expect(() => decodeAegisVault({ version: 1, header: {} })).toThrow(
+  it('rejects when db is missing', async () => {
+    await expect(decodeAegisVault({ version: 1, header: {} })).rejects.toThrow(
       /missing "db"/i
     )
   })

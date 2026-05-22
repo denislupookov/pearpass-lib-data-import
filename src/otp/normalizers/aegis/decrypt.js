@@ -11,9 +11,13 @@ export const AEGIS_SLOT_TYPE = {
   BIOMETRIC: 2
 }
 
-const hasBuffer = typeof Buffer !== 'undefined'
+class WrongPasswordError extends Error {}
 
-const toUtf8 = (str) => new TextEncoder().encode(str)
+const hasBuffer = typeof Buffer !== 'undefined'
+const textEncoder = new TextEncoder()
+const textDecoder = new TextDecoder()
+
+const toUtf8 = (str) => textEncoder.encode(str)
 
 const fromHex = (hex) => {
   const clean = hex.length % 2 ? `0${hex}` : hex
@@ -50,27 +54,85 @@ const concat = (a, b) => {
 const decryptGcm = (key, nonce, ciphertext, tag) =>
   gcm(key, nonce).decrypt(concat(ciphertext, tag))
 
+const HEX_RE = /^[0-9a-fA-F]+$/
+const isHex = (value) =>
+  typeof value === 'string' &&
+  value.length > 0 &&
+  value.length % 2 === 0 &&
+  HEX_RE.test(value)
+const isHexBytes = (value, bytes) => isHex(value) && value.length === bytes * 2
+const isPow2 = (n) => Number.isInteger(n) && n > 0 && (n & (n - 1)) === 0
+
 /**
- * Recovers the vault master key from a password slot.
+ * @param {Object} slot
+ * @throws {Error} if the slot is malformed
+ */
+const validatePasswordSlot = (slot) => {
+  if (
+    !isHex(slot?.salt) ||
+    !isHex(slot?.key) ||
+    !isHexBytes(slot?.key_params?.nonce, 12) ||
+    !isHexBytes(slot?.key_params?.tag, 16)
+  ) {
+    throw new Error('Corrupted Aegis export: malformed encryption slot')
+  }
+  if (
+    !isPow2(slot.n) ||
+    !Number.isInteger(slot.r) ||
+    slot.r <= 0 ||
+    !Number.isInteger(slot.p) ||
+    slot.p <= 0
+  ) {
+    throw new Error('Corrupted Aegis export: invalid scrypt parameters')
+  }
+}
+
+/**
+ * Recovers the vault master key from a single password slot.
+ *
  * @param {Object} slot
  * @param {string} password
- * @returns {Uint8Array} 32-byte master key
- * @throws if the password is wrong for this slot (GCM auth failure)
+ * @param {{ decryptViaWorklet?: (params: {
+ *   password: string, salt: string, n: number, r: number, p: number
+ * }) => Promise<Uint8Array> }} [options]
+ * @returns {Promise<Uint8Array>} 32-byte master key
+ * @throws {WrongPasswordError} if the password is wrong for this slot
+ * @throws {Error} if the slot is structurally corrupt
  */
-const decryptMasterKeyFromSlot = (slot, password) => {
-  const derivedKey = scrypt(toUtf8(password), fromHex(slot.salt), {
-    N: slot.n,
-    r: slot.r,
-    p: slot.p,
-    dkLen: 32
-  })
+const decryptMasterKeyFromSlot = async (
+  slot,
+  password,
+  { decryptViaWorklet } = {}
+) => {
+  validatePasswordSlot(slot)
 
-  return decryptGcm(
-    derivedKey,
-    fromHex(slot.key_params.nonce),
-    fromHex(slot.key),
-    fromHex(slot.key_params.tag)
-  )
+  const derivedKey = decryptViaWorklet
+    ? await decryptViaWorklet({
+        password,
+        salt: slot.salt,
+        n: slot.n,
+        r: slot.r,
+        p: slot.p
+      })
+    : scrypt(toUtf8(password), fromHex(slot.salt), {
+        N: slot.n,
+        r: slot.r,
+        p: slot.p,
+        dkLen: 32
+      })
+
+  try {
+    return decryptGcm(
+      derivedKey,
+      fromHex(slot.key_params.nonce),
+      fromHex(slot.key),
+      fromHex(slot.key_params.tag)
+    )
+  } catch {
+    throw new WrongPasswordError()
+  } finally {
+    derivedKey.fill?.(0)
+  }
 }
 
 /**
@@ -78,10 +140,15 @@ const decryptMasterKeyFromSlot = (slot, password) => {
  *
  * @param {Object} json - the parsed Aegis export (with `db` as a base64 string)
  * @param {string} password - the Aegis export password
- * @returns {{ version?: number, entries?: Object[] }} the decrypted db
- * @throws {Error} biometric-only export, missing password, or wrong password
+ * @param {{ decryptViaWorklet?: Function }} [options] - optional KDF offload hook
+ * @returns {Promise<{ version?: number, entries?: Object[] }>} the decrypted db
+ * @throws {Error} biometric-only export, missing password, wrong password, or corrupted export
  */
-export const decryptAegisVault = (json, password) => {
+export const decryptAegisVault = async (
+  json,
+  password,
+  { decryptViaWorklet } = {}
+) => {
   const slots = Array.isArray(json?.header?.slots) ? json.header.slots : []
   const passwordSlots = slots.filter(
     (s) => s?.type === AEGIS_SLOT_TYPE.PASSWORD
@@ -98,20 +165,33 @@ export const decryptAegisVault = (json, password) => {
   }
 
   let masterKey = null
+  let hadStructuralError = false
   for (const slot of passwordSlots) {
     try {
-      masterKey = decryptMasterKeyFromSlot(slot, password)
+      masterKey = await decryptMasterKeyFromSlot(slot, password, {
+        decryptViaWorklet
+      })
       break
-    } catch {
-      // Wrong password for this slot — try the next one.
+    } catch (error) {
+      if (error instanceof WrongPasswordError) continue
+      hadStructuralError = true
     }
   }
 
   if (!masterKey) {
-    throw new Error('Incorrect password')
+    throw new Error(
+      hadStructuralError
+        ? 'Corrupted Aegis export: malformed encryption slot'
+        : 'Incorrect password'
+    )
   }
 
-  const params = json.header.params
+  const params = json.header?.params
+  if (!isHexBytes(params?.nonce, 12) || !isHexBytes(params?.tag, 16)) {
+    masterKey.fill?.(0)
+    throw new Error('Corrupted Aegis export: malformed vault parameters')
+  }
+
   let plaintext
   try {
     plaintext = decryptGcm(
@@ -122,7 +202,13 @@ export const decryptAegisVault = (json, password) => {
     )
   } catch {
     throw new Error('Decryption failed — corrupted Aegis export')
+  } finally {
+    masterKey.fill?.(0)
   }
 
-  return JSON.parse(new TextDecoder().decode(plaintext))
+  try {
+    return JSON.parse(textDecoder.decode(plaintext))
+  } finally {
+    plaintext.fill?.(0)
+  }
 }

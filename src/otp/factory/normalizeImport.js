@@ -24,13 +24,14 @@ import { parseOtpUri } from '../shared/parseOtpUri.js'
  * (the import UI already knows which source the user picked).
  *
  * For Google Authenticator batch exports, pass all QR payloads together. For
- * encrypted Aegis exports, pass the password via `options.password`.
+ * encrypted Aegis exports, pass the password via `options.password` (and
+ * optionally `options.decryptViaWorklet` to offload the KDF off the UI thread).
  *
  * @param {string | string[]} input - OTP URI string(s) or a file's contents
- * @param {{ provider?: string, password?: string }} [options]
- * @returns {NormalizeResult}
+ * @param {{ provider?: string, password?: string, decryptViaWorklet?: Function }} [options]
+ * @returns {Promise<NormalizeResult>}
  */
-export function normalizeImport(input, options = {}) {
+export async function normalizeImport(input, options = {}) {
   const uris = Array.isArray(input) ? input : [input]
 
   if (uris.length === 0 || uris[0] === undefined || uris[0] === null) {
@@ -59,8 +60,16 @@ export function normalizeImport(input, options = {}) {
   }
 
   if (provider === OTP_PROVIDERS.aegis) {
-    const db = decodeAegisVault(uris[0], options.password)
-    const records = normalizeAegisDb(db)
+    // Each input is an independent Aegis export; concatenate their records
+    // (consistent with the otp-uri path) rather than dropping extras.
+    const dbs = await Promise.all(
+      uris.map((content) =>
+        decodeAegisVault(content, options.password, {
+          decryptViaWorklet: options.decryptViaWorklet
+        })
+      )
+    )
+    const records = dbs.flatMap(normalizeAegisDb)
     return { status: STATUS.complete, records }
   }
 

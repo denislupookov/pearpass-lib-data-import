@@ -93,6 +93,36 @@ describe('normalizeAegisDb', () => {
     })
   })
 
+  it('skips a present-but-invalid algorithm (never silently coerces to SHA1)', () => {
+    const records = normalizeAegisDb({
+      entries: [
+        makeEntry({
+          info: {
+            secret: 'JBSWY3DPEHPK3PXP',
+            algo: 'MD5',
+            digits: 6,
+            period: 30
+          }
+        }),
+        makeEntry() // a valid entry alongside the bad one
+      ]
+    })
+    // bad-algo entry skipped, valid entry kept — the whole import isn't aborted
+    expect(records).toHaveLength(1)
+    expect(records[0].algorithm).toBe('SHA1')
+  })
+
+  it('skips an entry whose secret is not a string', () => {
+    const records = normalizeAegisDb({
+      entries: [
+        makeEntry({
+          info: { secret: 12345, algo: 'SHA1', digits: 6, period: 30 }
+        })
+      ]
+    })
+    expect(records).toEqual([])
+  })
+
   it('returns [] for missing or empty entries', () => {
     expect(normalizeAegisDb({})).toEqual([])
     expect(normalizeAegisDb({ entries: [] })).toEqual([])
