@@ -15,8 +15,6 @@ describe('detectProvider', () => {
     expect(detectProvider('https://example.com')).toBe('unknown')
     expect(detectProvider('')).toBe('unknown')
     expect(detectProvider('not-a-uri')).toBe('unknown')
-    // File-based providers (e.g. Aegis JSON) are not sniffed here — they are
-    // selected explicitly via normalizeImport(input, { provider }).
     expect(
       detectProvider(JSON.stringify({ header: {}, db: { entries: [] } }))
     ).toBe('unknown')

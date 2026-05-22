@@ -1,7 +1,5 @@
 import { detectProvider } from './detectProvider.js'
 import { OTP_PROVIDERS, STATUS } from '../constants.js'
-import { decodeAegisVault } from '../normalizers/aegis/decodeAegis.js'
-import { normalizeAegisDb } from '../normalizers/aegis/normalize.js'
 import { aggregateBatches } from '../normalizers/google/batch.js'
 import { decodeMigrationUri } from '../normalizers/google/decodeMigration.js'
 import { normalizeGooglePayload } from '../normalizers/google/normalize.js'
@@ -16,29 +14,27 @@ import { parseOtpUri } from '../shared/parseOtpUri.js'
  */
 
 /**
- * Provider-agnostic entry point for importing OTP records.
+ * Normalizes OTP URI/QR imports into OTPRecord[].
  *
- * Accepts one or more decoded QR/URI strings, or the contents of a supported
- * file export (e.g. Aegis JSON). For QR/URI inputs the provider is auto-detected
- * from the scheme; for file-based providers the caller passes `options.provider`
- * (the import UI already knows which source the user picked).
+ * Accepts one or more decoded QR/URI strings and auto-detects the format from
+ * the URI scheme: Google Authenticator migration URIs (`otpauth-migration://`)
+ * and standard `otpauth://` URIs. For Google batch exports, pass all QR payloads
+ * together so partial batches can be detected.
  *
- * For Google Authenticator batch exports, pass all QR payloads together. For
- * encrypted Aegis exports, pass the password via `options.password` (and
- * optionally `options.decryptViaWorklet` to offload the KDF off the UI thread).
+ * File-based authenticator exports (e.g. Aegis, Proton) are handled by their own
+ * dedicated handlers — this stays a focused URI normalization layer.
  *
- * @param {string | string[]} input - OTP URI string(s) or a file's contents
- * @param {{ provider?: string, password?: string, decryptViaWorklet?: Function }} [options]
- * @returns {Promise<NormalizeResult>}
+ * @param {string | string[]} input - OTP URI string(s)
+ * @returns {NormalizeResult}
  */
-export async function normalizeImport(input, options = {}) {
+export function normalizeImport(input) {
   const uris = Array.isArray(input) ? input : [input]
 
   if (uris.length === 0 || uris[0] === undefined || uris[0] === null) {
     throw new Error('normalizeImport: input must not be empty')
   }
 
-  const provider = options.provider ?? detectProvider(uris[0])
+  const provider = detectProvider(uris[0])
 
   if (provider === OTP_PROVIDERS.googleMigration) {
     const payloads = uris.map(decodeMigrationUri)
@@ -59,19 +55,5 @@ export async function normalizeImport(input, options = {}) {
     return { status: STATUS.complete, records }
   }
 
-  if (provider === OTP_PROVIDERS.aegis) {
-    // Each input is an independent Aegis export; concatenate their records
-    // (consistent with the otp-uri path) rather than dropping extras.
-    const dbs = await Promise.all(
-      uris.map((content) =>
-        decodeAegisVault(content, options.password, {
-          decryptViaWorklet: options.decryptViaWorklet
-        })
-      )
-    )
-    const records = dbs.flatMap(normalizeAegisDb)
-    return { status: STATUS.complete, records }
-  }
-
-  throw new Error(`normalizeImport: unsupported or unrecognized input format`)
+  throw new Error('normalizeImport: unsupported or unrecognized input format')
 }
